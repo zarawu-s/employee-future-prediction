@@ -3,8 +3,8 @@ from pyspark.ml.feature import VectorAssembler
 from pyspark.ml.classification import NaiveBayes
 from pyspark.ml.evaluation import MulticlassClassificationEvaluator
 from pyspark.mllib.evaluation import MulticlassMetrics
-from imblearn.over_sampling import SMOTE
-from imblearn.under_sampling import RandomUnderSampler
+# from imblearn.over_sampling import SMOTE
+# from imblearn.under_sampling import RandomUnderSampler
 from pyspark.ml.pipeline import Pipeline
 from enum import Enum
 from pyspark.sql.types import IntegerType,DoubleType
@@ -13,6 +13,7 @@ from collections import Counter
 from pyspark.ml.classification import RandomForestClassifier
 from pyspark.sql.functions import col, explode, array, lit, rand, udf
 from pyspark.ml.stat import Correlation
+from pyspark.ml.classification import DecisionTreeClassifier
 
 
 
@@ -144,8 +145,13 @@ classifier = RandomForestClassifier(featuresCol="features", labelCol="label")
 pipeline = Pipeline(stages=[classifier])
 modelRfc = pipeline.fit(data)
 
-#predictions = modelNb.transform(test)
-predictions = modelRfc.transform(test) #Test set accuracy = 0.8255179934569248
+classifier = DecisionTreeClassifier(featuresCol="features", labelCol="label")
+pipeline = Pipeline(stages=[classifier])
+modelJ48 = pipeline.fit(data)
+
+#predictions = modelNb.transform(test) #Test set accuracy = 0.6553980370774264
+#predictions = modelRfc.transform(test) #Test set accuracy = 0.8353326063249727
+predictions = modelJ48.transform(test) #Test set accuracy = 0.8173391494002181
 
 evaluator = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction", metricName="accuracy")
 
@@ -159,9 +165,3 @@ print("Confusion Matrix:")
 print(confusionMatrix)
 
 spark.stop()
-
-#test commit
-#test commit 2
-#test commit 3
-#test commit 4
-#test commit 5

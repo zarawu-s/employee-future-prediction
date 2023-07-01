@@ -1,24 +1,14 @@
-from pyspark.sql import SparkSession, DataFrame
-from pyspark.ml.feature import VectorAssembler, BucketedRandomProjectionLSH
-from pyspark.ml.classification import NaiveBayes
-from pyspark.ml.evaluation import MulticlassClassificationEvaluator, BinaryClassificationEvaluator
-from pyspark.mllib.evaluation import MulticlassMetrics, BinaryClassificationMetrics
-from pyspark.ml.pipeline import Pipeline
+from pyspark.sql import SparkSession, Row
 from pyspark.sql.types import DoubleType
-from pyspark.ml.feature import StringIndexer
-from pyspark.ml.classification import RandomForestClassifier
-from pyspark.sql.functions import col, explode, array, lit, array, rand
-from pyspark.ml.classification import DecisionTreeClassifier
-import random
-from functools import reduce
-import pyspark.sql.functions as F
-from pyspark.sql.window import *
-from pyspark.sql.window import Window
-from pyspark.ml.linalg import VectorUDT
-import numpy as np
-from pyspark.sql import Row
+from pyspark.sql.functions import col, rand
+from pyspark.ml.feature import VectorAssembler, StringIndexer
+from pyspark.ml.classification import NaiveBayes, RandomForestClassifier, DecisionTreeClassifier
+from pyspark.ml.evaluation import MulticlassClassificationEvaluator
+from pyspark.ml.pipeline import Pipeline
+from pyspark.mllib.evaluation import MulticlassMetrics
 from sklearn import neighbors
-from pyspark import SparkContext
+import random
+import numpy as np
 
 spark = SparkSession.builder.appName("Projekat_3").getOrCreate()
 sc = spark.sparkContext
@@ -32,7 +22,6 @@ string_indexer = StringIndexer(inputCol="Gender", outputCol="IndexedGender")
 data = string_indexer.fit(data).transform(data)
 string_indexer = StringIndexer(inputCol="EverBenched", outputCol="IndexedEverBenched")
 data = string_indexer.fit(data).transform(data)
-
 data = data.drop("Education","City","Gender","EverBenched")
 
 data = data.select("IndexedEducation",
@@ -45,7 +34,6 @@ data = data.select("IndexedEducation",
                     data["ExperienceInCurrentDomain"].cast(DoubleType()).alias("ExperienceInCurrentDomain"),
                     data["label"].cast(DoubleType()).alias("label"))
 
-
 assembler = VectorAssembler(inputCols=data.columns[:-1], outputCol="features")
 data = assembler.transform(data).select("features", "label")
 
@@ -54,7 +42,7 @@ majority_count = data.filter(col("label") == 0).count()
 size_diff = abs(majority_count - minority_count)
 print("Size difference before balancing: {}".format(size_diff))
 
-# # SMOTE OVERSAMPLING
+# SMOTE OVERSAMPLING
 def SmoteSampling(vectorized, k = 5, minorityClass = 1, majorityClass = 0, percentageOver = 200, percentageUnder = 100):
     if(percentageUnder > 100|percentageUnder < 10):
         raise ValueError("Percentage Under must be in range 10 - 100");
@@ -93,12 +81,10 @@ def SmoteSampling(vectorized, k = 5, minorityClass = 1, majorityClass = 0, perce
 
 data = SmoteSampling(data, k = 2, minorityClass = 1, majorityClass = 0, percentageOver=100)
 
-
 # After oversampling minority_data, we oversample majority_data
 minority_count = data.filter(col("label") == 1).count()
 majority_count = data.filter(col("label") == 0).count()
 size_diff = abs(majority_count - minority_count)
-
 random_min_rows = data.filter(col("label") == 0).orderBy(rand()).limit(size_diff)
 data = data.unionAll(random_min_rows)
 
@@ -122,8 +108,8 @@ classifier = DecisionTreeClassifier(featuresCol="features", labelCol="label")
 pipeline = Pipeline(stages=[classifier])
 modelJ48 = pipeline.fit(data)
 
-#predictions = modelNb.transform(test) #Test set accuracy = 0.6553980370774264 // 0.6728922091782283
-#predictions = modelRfc.transform(test) #Test set accuracy = 0.8353326063249727 // 0.8585912486659552
+# predictions = modelNb.transform(test) #Test set accuracy = 0.6553980370774264 // 0.6728922091782283
+# predictions = modelRfc.transform(test) #Test set accuracy = 0.8353326063249727 // 0.8585912486659552
 predictions = modelJ48.transform(test) #Test set accuracy = 0.8173391494002181 // 0.8628601921024547
 
 evaluator = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction", metricName="accuracy")

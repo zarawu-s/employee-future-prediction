@@ -1,157 +1,130 @@
-from pyspark.sql import SparkSession
-from pyspark.ml.feature import VectorAssembler
+from pyspark.sql import SparkSession, DataFrame
+from pyspark.ml.feature import VectorAssembler, BucketedRandomProjectionLSH
 from pyspark.ml.classification import NaiveBayes
-from pyspark.ml.evaluation import MulticlassClassificationEvaluator
-from pyspark.mllib.evaluation import MulticlassMetrics
-# from imblearn.over_sampling import SMOTE
-# from imblearn.under_sampling import RandomUnderSampler
+from pyspark.ml.evaluation import MulticlassClassificationEvaluator, BinaryClassificationEvaluator
+from pyspark.mllib.evaluation import MulticlassMetrics, BinaryClassificationMetrics
 from pyspark.ml.pipeline import Pipeline
-from enum import Enum
-from pyspark.sql.types import IntegerType,DoubleType
+from pyspark.sql.types import DoubleType
 from pyspark.ml.feature import StringIndexer
-from collections import Counter
 from pyspark.ml.classification import RandomForestClassifier
-from pyspark.sql.functions import col, explode, array, lit, rand, udf
-from pyspark.ml.stat import Correlation
+from pyspark.sql.functions import col, explode, array, lit, array, rand
 from pyspark.ml.classification import DecisionTreeClassifier
-
-
+import random
+from functools import reduce
+import pyspark.sql.functions as F
+from pyspark.sql.window import *
+from pyspark.sql.window import Window
+from pyspark.ml.linalg import VectorUDT
+import numpy as np
+from pyspark.sql import Row
+from sklearn import neighbors
+from pyspark import SparkContext
 
 spark = SparkSession.builder.appName("Projekat_3").getOrCreate()
-
+sc = spark.sparkContext
 data = spark.read.csv('Employee.csv', header=True, inferSchema=True)
-
 
 string_indexer = StringIndexer(inputCol="Education", outputCol="IndexedEducation")
 data = string_indexer.fit(data).transform(data)
-
 string_indexer = StringIndexer(inputCol="City", outputCol="IndexedCity")
 data = string_indexer.fit(data).transform(data)
-
 string_indexer = StringIndexer(inputCol="Gender", outputCol="IndexedGender")
 data = string_indexer.fit(data).transform(data)
-
 string_indexer = StringIndexer(inputCol="EverBenched", outputCol="IndexedEverBenched")
 data = string_indexer.fit(data).transform(data)
 
 data = data.drop("Education","City","Gender","EverBenched")
-#data.show(5)
 
 data = data.select("IndexedEducation",
                     data["JoiningYear"].cast(DoubleType()).alias("JoiningYear"),
                     "IndexedCity",
-                   data["PaymentTier"].cast(DoubleType()).alias("PaymentTier"),
-                    data["Age"].cast(DoubleType()).alias("Age"),                 
-                   "IndexedGender",
-                   "IndexedEverBenched",
-                   data["ExperienceInCurrentDomain"].cast(DoubleType()).alias("ExperienceInCurrentDomain"),
-                   data["label"].cast(DoubleType()).alias("label"))
+                    data["PaymentTier"].cast(DoubleType()).alias("PaymentTier"),
+                    data["Age"].cast(DoubleType()).alias("Age"),
+                    "IndexedGender",
+                    "IndexedEverBenched",
+                    data["ExperienceInCurrentDomain"].cast(DoubleType()).alias("ExperienceInCurrentDomain"),
+                    data["label"].cast(DoubleType()).alias("label"))
 
-#data.show(5)
-#print(data.columns[:-1])
 
 assembler = VectorAssembler(inputCols=data.columns[:-1], outputCol="features")
 data = assembler.transform(data).select("features", "label")
 
-#spark.conf.set("spark.sql.repl.eagerEval.enabled", True)
-#data.show(10, truncate=False)
-
-
-#resampler  = SMOTE(sampling_strategy=0.1)
-#under = RandomUnderSampler(sampling_strategy=0.5)
-
-
-
-# Split the DataFrame into minority and majority classes
-minority_data = data.filter(col("label") == 1)
-majority_data = data.filter(col("label") == 0)
-
-# Calculate the size difference between the classes
-minority_count = minority_data.count()
-majority_count = majority_data.count()
-size_diff = majority_count - minority_count
-ratio = -(-majority_count//minority_count)
-print("ratio: {}".format(ratio))
-
-a = range(ratio)
-# duplicate the minority rows
-oversampled_df = minority_data.withColumn("dummy", explode(array([lit(x) for x in a]))).drop('dummy')
-# combine both oversampled minority rows and previous majority rows 
-data = majority_data.unionAll(oversampled_df)
-data.show()
-
-# Split the DataFrame into minority and majority classes
-minority_data = data.filter(col("label") == 1)
-majority_data = data.filter(col("label") == 0)
-
-# Calculate the size difference between the classes
-minority_count = minority_data.count()
-majority_count = majority_data.count()
+minority_count = data.filter(col("label") == 1).count()
+majority_count = data.filter(col("label") == 0).count()
 size_diff = abs(majority_count - minority_count)
-ratio = int(majority_count/minority_count)
-print("ratio after oversampling: {}".format(ratio))
+print("Size difference before balancing: {}".format(size_diff))
+
+# # SMOTE OVERSAMPLING
+def SmoteSampling(vectorized, k = 5, minorityClass = 1, majorityClass = 0, percentageOver = 200, percentageUnder = 100):
+    if(percentageUnder > 100|percentageUnder < 10):
+        raise ValueError("Percentage Under must be in range 10 - 100");
+    if(percentageOver < 100):
+        raise ValueError("Percentage Over must be in at least 100");
+    dataInput_min = vectorized[vectorized['label'] == minorityClass]
+    dataInput_maj = vectorized[vectorized['label'] == majorityClass]
+    feature = dataInput_min.select('features')
+    feature = feature.rdd
+    feature = feature.map(lambda x: x[0])
+    feature = feature.collect()
+    feature = np.asarray(feature)
+    nbrs = neighbors.NearestNeighbors(n_neighbors=k, algorithm='auto').fit(feature)
+    neighbours =  nbrs.kneighbors(feature)
+    gap = neighbours[0]
+    neighbours = neighbours[1]
+    min_rdd = dataInput_min.drop('label').rdd
+    pos_rddArray = min_rdd.map(lambda x : list(x))
+    pos_ListArray = pos_rddArray.collect()
+    min_Array = list(pos_ListArray)
+    newRows = []
+    nt = len(min_Array)
+    nexs = percentageOver//100
+    for i in range(nt):
+        for j in range(nexs):
+            neigh = random.randint(1,k)
+            difs = min_Array[neigh][0] - min_Array[i][0]
+            newRec = (min_Array[i][0]+random.random()*difs)
+            newRows.insert(0,(newRec))
+    newData_rdd = sc.parallelize(newRows)
+    newData_rdd_new = newData_rdd.map(lambda x: Row(features = x, label = 1))
+    new_data = newData_rdd_new.toDF()
+    new_data_minor = dataInput_min.unionAll(new_data)
+    new_data_major = dataInput_maj.sample(False, (float(percentageUnder)/float(100)))
+    return new_data_major.unionAll(new_data_minor)
+
+data = SmoteSampling(data, k = 2, minorityClass = 1, majorityClass = 0, percentageOver=100)
+
+
+# After oversampling minority_data, we oversample majority_data
+minority_count = data.filter(col("label") == 1).count()
+majority_count = data.filter(col("label") == 0).count()
+size_diff = abs(majority_count - minority_count)
 
 random_min_rows = data.filter(col("label") == 0).orderBy(rand()).limit(size_diff)
 data = data.unionAll(random_min_rows)
 
-minority_data = data.filter(col("label") == 1)
-majority_data = data.filter(col("label") == 0)
-minority_count = minority_data.count()
-majority_count = majority_data.count()
+minority_count = data.filter(col("label") == 1).count()
+majority_count = data.filter(col("label") == 0).count()
 size_diff = abs(majority_count - minority_count)
+print("Size difference after balancing: {}".format(size_diff))
 
-# # Determine the number of synthetic samples to generate
-# synthetic_ratio = 1.0  # Adjust as per your requirement
-# num_synthetic_samples = int(size_diff * synthetic_ratio)
-
-# # Calculate the k-nearest neighbors
-# k = 5  # Adjust as per your requirement
-# x = data["features"].values
-# correlation_matrix = np.corrcoef(x.reshape(-1,1), rowvar=False)
-# correlation_matrix = correlation_matrix.to_list()
-# knn_indices = [sorted(range(len(row)), key=lambda i: row[i], reverse=True)[:k] for row in correlation_matrix]
-
-# # Generate synthetic samples
-# def generate_synthetic_samples(row):
-#     synthetic_samples = []
-#     for _ in range(num_synthetic_samples):
-#         neighbor_index = knn_indices[row["label"]][int(size_diff * spark.sparkContext.nextDouble())]
-#         neighbor = minority_data.collect()[neighbor_index]
-#         synthetic_sample = {}
-#         for feature in neighbor.asDict():
-#             if feature != "label":
-#                 synthetic_sample[feature] = row[feature] + spark.sparkContext.nextDouble() * (neighbor[feature] - row[feature])
-#         synthetic_sample["label"] = row["label"]
-#         synthetic_samples.append(synthetic_sample)
-#     return synthetic_samples
-
-# synthetic_samples = majority_data.rdd.flatMap(generate_synthetic_samples).toDF()
-
-# # Combine the original and synthetic samples
-# resampled_data = minority_data.union(synthetic_samples)
-
-# # Show the resampled DataFrame
-# resampled_data.show()
-
-
-splits = data.randomSplit([0.7, 0.3], 3458)
+splits = data.randomSplit([0.7, 0.3], 5678)
 train = splits[0]
 test = splits[1]
 
-nb = NaiveBayes(smoothing=1.0, modelType="multinomial")
-modelNb = nb.fit(train)
+# nb = NaiveBayes(smoothing=1.0, modelType="multinomial")
+# modelNb = nb.fit(train)
 
-classifier = RandomForestClassifier(featuresCol="features", labelCol="label")
-pipeline = Pipeline(stages=[classifier])
-modelRfc = pipeline.fit(data)
+# classifier = RandomForestClassifier(featuresCol="features", labelCol="label")
+# pipeline = Pipeline(stages=[classifier])
+# modelRfc = pipeline.fit(data)
 
 classifier = DecisionTreeClassifier(featuresCol="features", labelCol="label")
 pipeline = Pipeline(stages=[classifier])
 modelJ48 = pipeline.fit(data)
 
-#predictions = modelNb.transform(test) #Test set accuracy = 0.6553980370774264
-#predictions = modelRfc.transform(test) #Test set accuracy = 0.8353326063249727
-predictions = modelJ48.transform(test) #Test set accuracy = 0.8173391494002181
+#predictions = modelNb.transform(test) #Test set accuracy = 0.6553980370774264 // 0.6728922091782283
+#predictions = modelRfc.transform(test) #Test set accuracy = 0.8353326063249727 // 0.8585912486659552
+predictions = modelJ48.transform(test) #Test set accuracy = 0.8173391494002181 // 0.8628601921024547
 
 evaluator = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction", metricName="accuracy")
 

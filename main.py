@@ -3,7 +3,7 @@ from pyspark.sql.types import DoubleType
 from pyspark.sql.functions import col, rand
 from pyspark.ml.feature import VectorAssembler, StringIndexer
 from pyspark.ml.classification import NaiveBayes, RandomForestClassifier, DecisionTreeClassifier
-from pyspark.ml.evaluation import MulticlassClassificationEvaluator
+from pyspark.ml.evaluation import MulticlassClassificationEvaluator, BinaryClassificationEvaluator
 from pyspark.ml.pipeline import Pipeline
 from pyspark.mllib.evaluation import MulticlassMetrics
 from sklearn import neighbors
@@ -113,9 +113,12 @@ modelJ48 = pipeline.fit(data)
 predictions = modelJ48.transform(test) #Test set accuracy = 0.8173391494002181 // 0.8628601921024547
 
 evaluator = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction", metricName="accuracy")
-
 accuracy = evaluator.evaluate(predictions)
 print("Test set accuracy = " + str(accuracy))
+
+evaluator = BinaryClassificationEvaluator(rawPredictionCol="rawPrediction", metricName="areaUnderROC")
+auc_roc = evaluator.evaluate(predictions)
+print("Area under ROC curve:", auc_roc) #modelJ48 ROCarea = 0.6360869644451734
 
 predictionAndLabels = predictions.select("prediction", "label").rdd.map(tuple)
 metrics = MulticlassMetrics(predictionAndLabels)

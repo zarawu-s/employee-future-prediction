@@ -9,6 +9,8 @@ from pyspark.mllib.evaluation import MulticlassMetrics
 from sklearn import neighbors
 import random
 import numpy as np
+from pyspark.ml.classification import LogisticRegression
+from pyspark.ml.tuning import CrossValidator, ParamGridBuilder, CrossValidatorModel
 
 spark = SparkSession.builder.appName("Projekat_3").getOrCreate()
 sc = spark.sparkContext
@@ -93,24 +95,38 @@ majority_count = data.filter(col("label") == 0).count()
 size_diff = abs(majority_count - minority_count)
 print("Size difference after balancing: {}".format(size_diff))
 
-splits = data.randomSplit([0.7, 0.3], 5678)
-train = splits[0]
-test = splits[1]
+# splits = data.randomSplit([0.7, 0.3], 5678)
+# train = splits[0]
+# test = splits[1]
 
 # nb = NaiveBayes(smoothing=1.0, modelType="multinomial")
-# modelNb = nb.fit(train)
 
-# classifier = RandomForestClassifier(featuresCol="features", labelCol="label")
-# pipeline = Pipeline(stages=[classifier])
-# modelRfc = pipeline.fit(data)
-
-classifier = DecisionTreeClassifier(featuresCol="features", labelCol="label")
+classifier = RandomForestClassifier(featuresCol="features", labelCol="label")
 pipeline = Pipeline(stages=[classifier])
-modelJ48 = pipeline.fit(data)
+
+# classifier = DecisionTreeClassifier(featuresCol="features", labelCol="label")
+# pipeline = Pipeline(stages=[classifier])
+
+lr = LogisticRegression()
+grid = ParamGridBuilder().addGrid(lr.maxIter, [0, 1]).build()
+evaluator = BinaryClassificationEvaluator()
+cv = CrossValidator(estimator=pipeline, estimatorParamMaps=grid, evaluator=evaluator,
+    parallelism=2)
+modelRfc = cv.fit(data)
+
+# modelNb = cv.fit(data)
+# modelRfc = cv.fit(data)
+# modelJ48 = cv.fit(data)
+
+# modelNb = nb.fit(train)
+# modelRfc = pipeline.fit(train)
+# modelJ48 = pipeline.fit(train)
 
 # predictions = modelNb.transform(test) #Test set accuracy = 0.6553980370774264 // 0.6728922091782283
-# predictions = modelRfc.transform(test) #Test set accuracy = 0.8353326063249727 // 0.8585912486659552
-predictions = modelJ48.transform(test) #Test set accuracy = 0.8173391494002181 // 0.8628601921024547
+predictions = modelRfc.transform(data) #Test set accuracy = 0.8353326063249727 // 0.8585912486659552
+# predictions = modelJ48.transform(test) #Test set accuracy = 0.8173391494002181 // 0.8628601921024547
+
+
 
 evaluator = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction", metricName="accuracy")
 accuracy = evaluator.evaluate(predictions)

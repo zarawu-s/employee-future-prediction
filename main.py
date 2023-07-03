@@ -11,6 +11,8 @@ import random
 import numpy as np
 from pyspark.ml.classification import LogisticRegression
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder, CrossValidatorModel
+from pyspark.ml.linalg import Vectors
+from sklearn.neighbors import KNeighborsClassifier
 
 spark = SparkSession.builder.appName("Projekat_3").getOrCreate()
 sc = spark.sparkContext
@@ -95,24 +97,26 @@ majority_count = data.filter(col("label") == 0).count()
 size_diff = abs(majority_count - minority_count)
 print("Size difference after balancing: {}".format(size_diff))
 
+
 # splits = data.randomSplit([0.7, 0.3], 5678)
 # train = splits[0]
 # test = splits[1]
 
 # nb = NaiveBayes(smoothing=1.0, modelType="multinomial")
 
-classifier = RandomForestClassifier(featuresCol="features", labelCol="label")
-pipeline = Pipeline(stages=[classifier])
-
 # classifier = DecisionTreeClassifier(featuresCol="features", labelCol="label")
 # pipeline = Pipeline(stages=[classifier])
 
-lr = LogisticRegression()
-grid = ParamGridBuilder().addGrid(lr.maxIter, [0, 1]).build()
-evaluator = BinaryClassificationEvaluator()
-cv = CrossValidator(estimator=pipeline, estimatorParamMaps=grid, evaluator=evaluator,
-    parallelism=2)
-modelRfc = cv.fit(data)
+# classifier = RandomForestClassifier(featuresCol="features", labelCol="label")
+# pipeline = Pipeline(stages=[classifier])
+
+# lr = LogisticRegression()
+# grid = ParamGridBuilder().addGrid(lr.maxIter, [0, 1]).build()
+# evaluator = BinaryClassificationEvaluator()
+# cv = CrossValidator(estimator=pipeline, estimatorParamMaps=grid, evaluator=evaluator,
+#     parallelism=2)
+# modelRfc = cv.fit(data)
+
 
 # modelNb = cv.fit(data)
 # modelRfc = cv.fit(data)
@@ -123,23 +127,47 @@ modelRfc = cv.fit(data)
 # modelJ48 = pipeline.fit(train)
 
 # predictions = modelNb.transform(test) #Test set accuracy = 0.6553980370774264 // 0.6728922091782283
-predictions = modelRfc.transform(data) #Test set accuracy = 0.8353326063249727 // 0.8585912486659552
+# predictions = modelRfc.transform(data) #Test set accuracy = 0.8353326063249727 // 0.8585912486659552
 # predictions = modelJ48.transform(test) #Test set accuracy = 0.8173391494002181 // 0.8628601921024547
 
-
+#KNN
+rdd = data.rdd.map(lambda row: (Vectors.dense(row.features.toArray()), row.label))
+X = np.array(rdd.map(lambda x: x[0]).collect())
+y = np.array(rdd.map(lambda x: x[1]).collect())
+knn = KNeighborsClassifier(n_neighbors=3)
+knn.fit(X, y)
+predictions = knn.predict(X)
+prediction_rdd = spark.sparkContext.parallelize(zip(predictions.tolist(), y.tolist()))
+prediction_df = prediction_rdd.toDF(["prediction", "label"])
 
 evaluator = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction", metricName="accuracy")
-accuracy = evaluator.evaluate(predictions)
-print("Test set accuracy = " + str(accuracy))
+accuracy = evaluator.evaluate(prediction_df)
+print("Test set accuracy = " + str(accuracy)) # Test set accuracy = 0.88921875
 
-evaluator = BinaryClassificationEvaluator(rawPredictionCol="rawPrediction", metricName="areaUnderROC")
-auc_roc = evaluator.evaluate(predictions)
-print("Area under ROC curve:", auc_roc) #modelJ48 ROCarea = 0.6360869644451734
+evaluator = BinaryClassificationEvaluator(rawPredictionCol="prediction", metricName="areaUnderROC")
+auc_roc = evaluator.evaluate(prediction_df)
+print("Area under ROC curve:", auc_roc) # Area under ROC curve: 0.88921875
 
-predictionAndLabels = predictions.select("prediction", "label").rdd.map(tuple)
+predictionAndLabels = prediction_df.select("prediction", "label").rdd.map(tuple)
 metrics = MulticlassMetrics(predictionAndLabels)
 confusionMatrix = metrics.confusionMatrix()
 print("Confusion Matrix:")
-print(confusionMatrix)
+print(confusionMatrix) #DenseMatrix([[3012.,  188.],
+                                    #[ 521., 2679.]])
+
+
+# evaluator = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction", metricName="accuracy")
+# accuracy = evaluator.evaluate(predictions)
+# print("Test set accuracy = " + str(accuracy))
+
+# evaluator = BinaryClassificationEvaluator(rawPredictionCol="rawPrediction", metricName="areaUnderROC")
+# auc_roc = evaluator.evaluate(predictions)
+# print("Area under ROC curve:", auc_roc) #modelJ48 ROCarea = 0.6360869644451734
+
+# predictionAndLabels = predictions.select("prediction", "label").rdd.map(tuple)
+# metrics = MulticlassMetrics(predictionAndLabels)
+# confusionMatrix = metrics.confusionMatrix()
+# print("Confusion Matrix:")
+# print(confusionMatrix)
 
 spark.stop()

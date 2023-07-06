@@ -182,46 +182,38 @@ test_results += "{}\nRandom Forest Classifier with cross validation, 10 folds\nT
     timestamp, accuracy, auc_roc, confusionMatrix)
 
 # KNN 
-# rdd = data.rdd.map(lambda row: (Vectors.dense(row.features.toArray()), row.label))
-# X = np.array(rdd.map(lambda x: x[0]).collect())
-# y = np.array(rdd.map(lambda x: x[1]).collect())
+k_values = [1, 3, 5, 7]
 
-data_array = data.rdd.map(lambda row: (row.features.toArray(), row.label)).collect()
-X = np.array([x[0] for x in data_array])
-y = np.array([x[1] for x in data_array])
+rdd = data.rdd.map(lambda row: (Vectors.dense(row.features.toArray()), row.label))
+X = np.array(rdd.map(lambda x: x[0]).collect())
+y = np.array(rdd.map(lambda x: x[1]).collect())
 
-# Print the shape of X and y to check if they have the expected dimensions
-print(X.shape)
-print(y.shape)
+for k in k_values:
+    print("Running KNN with k =", k)
+    knn = KNeighborsClassifier(n_neighbors=k)
+    knn.fit(X, y)
+    predictions = knn.predict(X)
+    prediction_rdd = spark.sparkContext.parallelize(zip(predictions.tolist(), y.tolist()))
+    prediction_df = prediction_rdd.toDF(["prediction", "label"])
 
-# Verify the content of X and y
-print(X)
-print(y)
+    evaluator = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction", metricName="accuracy")
+    accuracy = evaluator.evaluate(prediction_df)
+    print("Test set accuracy = " + str(accuracy)) 
 
-knn = KNeighborsClassifier(n_neighbors=3)
-knn.fit(X, y)
-predictions = knn.predict(X)
-prediction_rdd = spark.sparkContext.parallelize(zip(predictions.tolist(), y.tolist()))
-prediction_df = prediction_rdd.toDF(["prediction", "label"])
+    evaluator = BinaryClassificationEvaluator(rawPredictionCol="prediction", metricName="areaUnderROC")
+    auc_roc = evaluator.evaluate(prediction_df)
+    print("Area under ROC curve:", auc_roc) 
 
-evaluator = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction", metricName="accuracy")
-accuracy = evaluator.evaluate(prediction_df)
-print("Test set accuracy = " + str(accuracy)) 
+    predictionAndLabels = prediction_df.select("prediction", "label").rdd.map(tuple)
+    metrics = MulticlassMetrics(predictionAndLabels)
+    confusionMatrix = metrics.confusionMatrix()
+    print("Confusion Matrix:")
+    print(confusionMatrix) 
 
-evaluator = BinaryClassificationEvaluator(rawPredictionCol="prediction", metricName="areaUnderROC")
-auc_roc = evaluator.evaluate(prediction_df)
-print("Area under ROC curve:", auc_roc) 
-
-predictionAndLabels = prediction_df.select("prediction", "label").rdd.map(tuple)
-metrics = MulticlassMetrics(predictionAndLabels)
-confusionMatrix = metrics.confusionMatrix()
-print("Confusion Matrix:")
-print(confusionMatrix) 
-
-timestamp = datetime.datetime.now().strftime("%d-%m-%y %H-%M")
-test_results += "{}\nKNN\nTest set accuracy: {}\nArea under ROC curve: {}\nConfusion Matrix:\n{}".format(
-    timestamp, accuracy, auc_roc, confusionMatrix)
-print(test_results)
+    timestamp = datetime.datetime.now().strftime("%d-%m-%y %H-%M")
+    test_results += "\n{}\nKNN\nRunning KNN with k = {}\nTest set accuracy: {}\nArea under ROC curve: {}\nConfusion Matrix:\n{}\n".format(
+        timestamp, k, accuracy, auc_roc, confusionMatrix)
+    print(test_results)
 
 file_name = timestamp + " test_results.txt"
 with open(file_name, 'w') as file:
